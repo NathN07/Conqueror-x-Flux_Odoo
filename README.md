@@ -21,7 +21,7 @@ Follow these steps one by one in Windows PowerShell to set up and run the applic
 
 ### Step 1: Clone the repository (if not already done)
 ```powershell
-git clone <repository-url>
+git clone https://github.com/NathN07/Conqueror-x-Flux_Odoo
 ```
 ```powershell
 cd Conqueror-x-Flux_Odoo
