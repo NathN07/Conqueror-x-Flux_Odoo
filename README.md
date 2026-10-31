@@ -4,6 +4,7 @@ Brightloop is a full-lifecycle recurring billing and subscription management pla
 
 ---
 Live link: https://super-taffy-6499bc.netlify.app/
+Video Link: https://drive.google.com/file/d/1Oo8Ra7BORHekIHQAsjZAntEcyxCN9jJx/view?usp=sharing
 
 ## Tech Stack
 
