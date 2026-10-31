@@ -1,36 +1,88 @@
-import { Layers, Receipt, CreditCard, Users, ArrowUpRight } from "lucide-react";
+import { prisma } from "@/lib/prisma";
+import { requireRole } from "@/lib/auth";
+import { Role, SubscriptionStatus } from "@prisma/client";
+import {
+  Layers,
+  Receipt,
+  CreditCard,
+  Users,
+  ArrowUpRight,
+  Plus,
+} from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { formatPaiseToInr } from "@/lib/money";
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  await requireRole(Role.ADMIN, Role.STAFF);
+
+  // Parallel database metrics query
+  const [activeSubs, totalCustomers, totalInvoices, allActiveSubscriptions] =
+    await Promise.all([
+      prisma.subscription.count({
+        where: { status: SubscriptionStatus.ACTIVE },
+      }),
+      prisma.user.count({
+        where: { role: Role.CUSTOMER },
+      }),
+      prisma.invoice.count(),
+      prisma.subscription.findMany({
+        where: { status: SubscriptionStatus.ACTIVE },
+        include: {
+          plan: true,
+          lines: true,
+        },
+      }),
+    ]);
+
+  // Compute normalized MRR in paise from active subscriptions
+  let mrrPaise = 0;
+  for (const sub of allActiveSubscriptions) {
+    const subtotal = sub.lines.reduce((acc, line) => acc + line.lineAmount, 0);
+    switch (sub.plan.billingFrequency) {
+      case "DAILY":
+        mrrPaise += subtotal * 30;
+        break;
+      case "WEEKLY":
+        mrrPaise += Math.round(subtotal * 4.33);
+        break;
+      case "MONTHLY":
+        mrrPaise += subtotal;
+        break;
+      case "YEARLY":
+        mrrPaise += Math.round(subtotal / 12);
+        break;
+    }
+  }
+
   const cards = [
     {
       title: "Active Subscriptions",
-      value: "0",
-      description: "Subscriptions currently renewing",
+      value: String(activeSubs),
+      description: "Contracts currently renewing",
       icon: Layers,
       color: "text-blue-600 bg-blue-50 border-blue-100",
+      href: "/subscriptions?status=ACTIVE",
+    },
+    {
+      title: "Normalized Monthly MRR",
+      value: formatPaiseToInr(mrrPaise),
+      description: "Recurring revenue run rate",
+      icon: ArrowUpRight,
+      color: "text-emerald-600 bg-emerald-50 border-emerald-100",
       href: "/subscriptions",
     },
     {
-      title: "Monthly Recurring Revenue",
-      value: "₹0.00",
-      description: "Normalized MRR across plans",
-      icon: ArrowUpRight,
-      color: "text-emerald-600 bg-emerald-50 border-emerald-100",
-      href: "/invoices",
-    },
-    {
-      title: "Pending Invoices",
-      value: "0",
-      description: "Invoices awaiting payment",
+      title: "Total Invoices",
+      value: String(totalInvoices),
+      description: "Billing statements generated",
       icon: Receipt,
       color: "text-amber-600 bg-amber-50 border-amber-100",
       href: "/invoices",
     },
     {
-      title: "Total Customers",
-      value: "0",
+      title: "Direct Customers",
+      value: String(totalCustomers),
       description: "Registered accounts in directory",
       icon: Users,
       color: "text-purple-600 bg-purple-50 border-purple-100",
@@ -51,11 +103,11 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <Button variant="outline" asChild>
-            <Link href="/quotes">New Quote</Link>
-          </Button>
           <Button asChild>
-            <Link href="/subscriptions">New Subscription</Link>
+            <Link href="/subscriptions/new" className="flex items-center gap-1.5">
+              <Plus className="h-4 w-4" />
+              New Subscription
+            </Link>
           </Button>
         </div>
       </div>
@@ -65,9 +117,10 @@ export default function DashboardPage() {
         {cards.map((card) => {
           const Icon = card.icon;
           return (
-            <div
+            <Link
               key={card.title}
-              className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm transition hover:shadow-md"
+              href={card.href}
+              className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm transition hover:shadow-md hover:border-slate-300"
             >
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-slate-500">
@@ -83,20 +136,26 @@ export default function DashboardPage() {
                 <p className="text-2xl font-bold text-slate-900">{card.value}</p>
                 <p className="mt-1 text-xs text-slate-500">{card.description}</p>
               </div>
-            </div>
+            </Link>
           );
         })}
       </div>
 
-      {/* Getting Started / Next Steps Card */}
+      {/* Quick Launch Card */}
       <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">
-          System Initialization
-        </h2>
-        <p className="mt-1 text-sm text-slate-500">
-          Next.js App Router, TypeScript, Tailwind CSS, and shadcn/ui base scaffolded cleanly.
-          Database schema configuration ready for Prisma setup in the next step.
-        </p>
+        <div className="flex items-center justify-between border-b pb-4">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">
+              Subscription Management Engine Ready
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Pure state machine enforced (Draft → Quotation → Confirmed → Active ⇄ Paused → Closed) with integer paise calculations.
+            </p>
+          </div>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/subscriptions">Open Subscriptions Directory</Link>
+          </Button>
+        </div>
       </div>
     </div>
   );
