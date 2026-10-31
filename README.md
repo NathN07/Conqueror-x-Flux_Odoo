@@ -1,4 +1,4 @@
-# Brightloop - Subscription Management System
+# Brightloop - Subscription Management System made by the team
 
 Brightloop is a full-lifecycle recurring billing and subscription management platform built with Next.js App Router, TypeScript, Tailwind CSS, shadcn/ui, Prisma, and PostgreSQL.
 
