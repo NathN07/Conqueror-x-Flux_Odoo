@@ -30,30 +30,27 @@ async function generateUniqueSubscriptionNumber(): Promise<string> {
   const year = new Date().getUTCFullYear();
   const prefix = `SUB-${year}-`;
 
-  const latest = await prisma.subscription.findFirst({
+  const existingSubs = await prisma.subscription.findMany({
     where: {
       subscriptionNumber: {
         startsWith: prefix,
       },
-    },
-    orderBy: {
-      subscriptionNumber: "desc",
     },
     select: {
       subscriptionNumber: true,
     },
   });
 
-  let nextSeq = 1;
-  if (latest?.subscriptionNumber) {
-    const parts = latest.subscriptionNumber.split("-");
+  let maxSeq = 0;
+  for (const s of existingSubs) {
+    const parts = s.subscriptionNumber.split("-");
     const num = parseInt(parts[2], 10);
-    if (!isNaN(num)) {
-      nextSeq = num + 1;
+    if (!isNaN(num) && num > maxSeq) {
+      maxSeq = num;
     }
   }
 
-  return `${prefix}${String(nextSeq).padStart(4, "0")}`;
+  return `${prefix}${String(maxSeq + 1).padStart(4, "0")}`;
 }
 
 /**
