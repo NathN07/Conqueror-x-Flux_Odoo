@@ -206,7 +206,7 @@ export async function getDashboardFinancialMetrics(filters: DashboardFilterParam
       JOIN "Plan" p ON s."planId" = p.id
       JOIN "SubscriptionLine" sl ON s.id = sl."subscriptionId"
       WHERE 1=1
-      ${status ? Prisma.sql`AND s.status = ${status}::"SubscriptionStatus"` : Prisma.empty}
+      ${statusFilter ? Prisma.sql`AND s.status = ${statusFilter}::"SubscriptionStatus"` : Prisma.empty}
       ${customerId ? Prisma.sql`AND s."customerId" = ${customerId}` : Prisma.empty}
       ${planId ? Prisma.sql`AND s."planId" = ${planId}` : Prisma.empty}
       GROUP BY s.status
