@@ -110,81 +110,64 @@ export async function getDashboardFinancialMetrics(filters: DashboardFilterParam
   twelveMonthsAgo.setDate(1);
   twelveMonthsAgo.setHours(0, 0, 0, 0);
 
-  // Execute all independent queries concurrently with Promise.all
+  // Execute consolidated independent queries concurrently
   const [
-    activeSubsCount,
-    totalSubsCount,
     paymentAgg,
-    invoiceBilledAgg,
-    confirmedUnpaidAgg,
-    overdueAgg,
-    invoicesByStatusGroup,
-    mrrFrequencyRows,
+    invoiceMetricsRaw,
     monthlyPaymentsRaw,
-    subscriptionsByStatusRaw,
+    subscriptionsMonthlyValueRaw,
     overdueInvoices,
-    overdueTotalCount,
     recentPayments,
-    paymentsTotalCount,
     customersList,
     plansList,
   ] = await Promise.all([
-    // Active subscriptions count
-    prisma.subscription.count({
-      where: { ...subWhere, status: SubscriptionStatus.ACTIVE },
-    }),
-
-    // Total subscriptions count
-    prisma.subscription.count({ where: subWhere }),
-
-    // Revenue collected (sum of payments)
+    // 1. Revenue collected (sum of payments)
     prisma.payment.aggregate({
       where: payWhere,
       _sum: { amount: true },
       _count: true,
     }),
 
-    // Total billed (sum of totalAmount on invoices)
-    prisma.invoice.aggregate({
-      where: invWhere,
-      _sum: { totalAmount: true, amountPaid: true },
-      _count: true,
-    }),
-
-    // Outstanding on CONFIRMED invoices
-    prisma.invoice.aggregate({
-      where: confirmedUnpaidWhere,
-      _sum: { totalAmount: true, amountPaid: true },
-    }),
-
-    // Overdue invoices aggregate
-    prisma.invoice.aggregate({
-      where: overdueWhere,
-      _count: true,
-      _sum: { totalAmount: true, amountPaid: true },
-    }),
-
-    // Invoices distribution by status
-    prisma.invoice.groupBy({
-      by: ["status"],
-      where: invWhere,
-      _count: true,
-      _sum: { totalAmount: true },
-    }),
-
-    // MRR calculation: group line amounts by billing frequency for active subscriptions
-    prisma.$queryRaw<Array<{ billingFrequency: BillingFrequency; totalLineAmount: bigint }>>`
-      SELECT p."billingFrequency", COALESCE(SUM(sl."lineAmount"), 0)::bigint as "totalLineAmount"
-      FROM "Subscription" s
-      JOIN "Plan" p ON s."planId" = p.id
-      JOIN "SubscriptionLine" sl ON s.id = sl."subscriptionId"
-      WHERE s.status = 'ACTIVE'
-      ${customerId ? Prisma.sql`AND s."customerId" = ${customerId}` : Prisma.empty}
+    // 2. Consolidated Invoice aggregates & status breakdown in ONE single table scan
+    prisma.$queryRaw<
+      Array<{
+        total_billed: bigint;
+        outstanding: bigint;
+        overdue_count: number;
+        overdue_amount: bigint;
+        draft_count: number;
+        draft_total: bigint;
+        confirmed_count: number;
+        confirmed_total: bigint;
+        paid_count: number;
+        paid_total: bigint;
+        cancelled_count: number;
+        cancelled_total: bigint;
+      }>
+    >`
+      SELECT
+        COALESCE(SUM(CASE WHEN i.status != 'CANCELLED' THEN i."totalAmount" ELSE 0 END), 0)::bigint as total_billed,
+        COALESCE(SUM(CASE WHEN i.status = 'CONFIRMED' THEN GREATEST(0, i."totalAmount" - i."amountPaid") ELSE 0 END), 0)::bigint as outstanding,
+        COUNT(CASE WHEN i.status = 'CONFIRMED' AND i."dueDate" < ${now} THEN 1 END)::int as overdue_count,
+        COALESCE(SUM(CASE WHEN i.status = 'CONFIRMED' AND i."dueDate" < ${now} THEN GREATEST(0, i."totalAmount" - i."amountPaid") ELSE 0 END), 0)::bigint as overdue_amount,
+        COUNT(CASE WHEN i.status = 'DRAFT' THEN 1 END)::int as draft_count,
+        COALESCE(SUM(CASE WHEN i.status = 'DRAFT' THEN i."totalAmount" ELSE 0 END), 0)::bigint as draft_total,
+        COUNT(CASE WHEN i.status = 'CONFIRMED' THEN 1 END)::int as confirmed_count,
+        COALESCE(SUM(CASE WHEN i.status = 'CONFIRMED' THEN i."totalAmount" ELSE 0 END), 0)::bigint as confirmed_total,
+        COUNT(CASE WHEN i.status = 'PAID' THEN 1 END)::int as paid_count,
+        COALESCE(SUM(CASE WHEN i.status = 'PAID' THEN i."totalAmount" ELSE 0 END), 0)::bigint as paid_total,
+        COUNT(CASE WHEN i.status = 'CANCELLED' THEN 1 END)::int as cancelled_count,
+        COALESCE(SUM(CASE WHEN i.status = 'CANCELLED' THEN i."totalAmount" ELSE 0 END), 0)::bigint as cancelled_total
+      FROM "Invoice" i
+      ${planId ? Prisma.sql`JOIN "Subscription" s ON i."subscriptionId" = s.id` : Prisma.empty}
+      WHERE 1=1
+      ${customerId ? Prisma.sql`AND i."customerId" = ${customerId}` : Prisma.empty}
       ${planId ? Prisma.sql`AND s."planId" = ${planId}` : Prisma.empty}
-      GROUP BY p."billingFrequency"
+      ${startDate ? Prisma.sql`AND i."issuedDate" >= ${startDate}` : Prisma.empty}
+      ${endDate ? Prisma.sql`AND i."issuedDate" <= ${endDate}` : Prisma.empty}
     `,
 
-    // Monthly revenue collected for last 12 months
+    // 3. Monthly revenue collected for last 12 months
     prisma.$queryRaw<Array<{ month: string; totalAmount: bigint }>>`
       SELECT
         TO_CHAR(p."paymentDate", 'YYYY-MM') as month,
@@ -205,7 +188,7 @@ export async function getDashboardFinancialMetrics(filters: DashboardFilterParam
       ORDER BY month ASC
     `,
 
-    // Subscriptions count & normalized monthly run rate by status
+    // 4. Subscriptions count and monthly run rate by status in ONE query
     prisma.$queryRaw<Array<{ status: SubscriptionStatus; count: number; monthlyValue: bigint }>>`
       SELECT
         s.status,
@@ -220,18 +203,24 @@ export async function getDashboardFinancialMetrics(filters: DashboardFilterParam
           END
         ), 0)::bigint as "monthlyValue"
       FROM "Subscription" s
-      LEFT JOIN "Plan" p ON s."planId" = p.id
-      LEFT JOIN "SubscriptionLine" sl ON s.id = sl."subscriptionId"
+      JOIN "Plan" p ON s."planId" = p.id
+      JOIN "SubscriptionLine" sl ON s.id = sl."subscriptionId"
       WHERE 1=1
+      ${status ? Prisma.sql`AND s.status = ${status}::"SubscriptionStatus"` : Prisma.empty}
       ${customerId ? Prisma.sql`AND s."customerId" = ${customerId}` : Prisma.empty}
       ${planId ? Prisma.sql`AND s."planId" = ${planId}` : Prisma.empty}
       GROUP BY s.status
     `,
 
-    // Paginated Overdue Invoices Table (Oldest First)
+    // 5. Paginated Overdue Invoices Table (Oldest First)
     prisma.invoice.findMany({
       where: overdueWhere,
-      include: {
+      select: {
+        id: true,
+        invoiceNumber: true,
+        dueDate: true,
+        totalAmount: true,
+        amountPaid: true,
         customer: { select: { name: true, email: true } },
       },
       orderBy: { dueDate: "asc" },
@@ -239,15 +228,20 @@ export async function getDashboardFinancialMetrics(filters: DashboardFilterParam
       take: overduePageSize,
     }),
 
-    // Total count of overdue invoices
-    prisma.invoice.count({ where: overdueWhere }),
-
-    // Paginated Recent Payments Table
+    // 6. Paginated Recent Payments Table
     prisma.payment.findMany({
       where: payWhere,
-      include: {
+      select: {
+        id: true,
+        paymentDate: true,
+        amount: true,
+        method: true,
+        transactionRef: true,
+        notes: true,
         invoice: {
-          include: {
+          select: {
+            id: true,
+            invoiceNumber: true,
             customer: { select: { name: true } },
           },
         },
@@ -257,14 +251,12 @@ export async function getDashboardFinancialMetrics(filters: DashboardFilterParam
       take: paymentsPageSize,
     }),
 
-    // Total count of payments matching filters
-    prisma.payment.count({ where: payWhere }),
-
-    // Dropdown filters data
+    // 7. Dropdown filters data (bounded)
     prisma.user.findMany({
       where: { role: Role.CUSTOMER },
       select: { id: true, name: true },
       orderBy: { name: "asc" },
+      take: 50,
     }),
     prisma.plan.findMany({
       select: { id: true, name: true },
@@ -272,41 +264,26 @@ export async function getDashboardFinancialMetrics(filters: DashboardFilterParam
     }),
   ]);
 
-  // Compute MRR from frequency rows:
-  // daily * 30, weekly * 52 / 12, monthly * 1, yearly / 12
-  let mrrPaise = 0;
-  for (const row of mrrFrequencyRows) {
-    const lineAmt = Number(row.totalLineAmount);
-    switch (row.billingFrequency) {
-      case BillingFrequency.DAILY:
-        mrrPaise += lineAmt * 30;
-        break;
-      case BillingFrequency.WEEKLY:
-        mrrPaise += Math.round((lineAmt * 52) / 12);
-        break;
-      case BillingFrequency.MONTHLY:
-        mrrPaise += lineAmt;
-        break;
-      case BillingFrequency.YEARLY:
-        mrrPaise += Math.round(lineAmt / 12);
-        break;
-    }
-  }
+  // Derived metrics from consolidated query results
+  const metrics = invoiceMetricsRaw[0];
 
-  // Revenue collected
+  const activeSubsCount =
+    subscriptionsMonthlyValueRaw.find((s) => s.status === SubscriptionStatus.ACTIVE)?.count || 0;
+  const totalSubsCount = subscriptionsMonthlyValueRaw.reduce((acc, s) => acc + s.count, 0);
+
   const revenueCollectedPaise = paymentAgg._sum.amount || 0;
+  const paymentsTotalCount = paymentAgg._count;
 
-  // Total Billed
-  const totalBilledPaise = invoiceBilledAgg._sum.totalAmount || 0;
+  const totalBilledPaise = Number(metrics?.total_billed || 0);
+  const outstandingPaise = Number(metrics?.outstanding || 0);
+  const overdueInvoiceCount = Number(metrics?.overdue_count || 0);
+  const overdueAmountPaise = Number(metrics?.overdue_amount || 0);
+  const overdueTotalCount = overdueInvoiceCount;
 
-  // Outstanding amount (on confirmed invoices)
-  const outstandingPaise =
-    (confirmedUnpaidAgg._sum.totalAmount || 0) - (confirmedUnpaidAgg._sum.amountPaid || 0);
-
-  // Overdue count and amount
-  const overdueInvoiceCount = overdueAgg._count;
-  const overdueAmountPaise =
-    (overdueAgg._sum.totalAmount || 0) - (overdueAgg._sum.amountPaid || 0);
+  // Normalized MRR directly from Active status monthly run rate
+  const mrrPaise = Number(
+    subscriptionsMonthlyValueRaw.find((s) => s.status === SubscriptionStatus.ACTIVE)?.monthlyValue || 0
+  );
 
   // Format 12 Months Chart Data (ensure all 12 months exist even if 0 revenue)
   const monthlyRevenueMap = new Map<string, number>();
@@ -327,18 +304,18 @@ export async function getDashboardFinancialMetrics(filters: DashboardFilterParam
     monthCursor.setMonth(monthCursor.getMonth() + 1);
   }
 
-  // Format Invoices Distribution Chart
+  // Format Invoices Distribution Chart directly from consolidated metrics scan
   const invoicesDistribution: Array<{
     name: string;
     count: number;
     color: string;
     totalPaise: number;
-  }> = invoicesByStatusGroup.map((item) => ({
-    name: String(item.status),
-    count: item._count,
-    color: "",
-    totalPaise: item._sum.totalAmount || 0,
-  }));
+  }> = [
+    { name: "DRAFT", count: metrics?.draft_count || 0, color: "", totalPaise: Number(metrics?.draft_total || 0) },
+    { name: "CONFIRMED", count: metrics?.confirmed_count || 0, color: "", totalPaise: Number(metrics?.confirmed_total || 0) },
+    { name: "PAID", count: metrics?.paid_count || 0, color: "", totalPaise: Number(metrics?.paid_total || 0) },
+    { name: "CANCELLED", count: metrics?.cancelled_count || 0, color: "", totalPaise: Number(metrics?.cancelled_total || 0) },
+  ].filter((item) => item.count > 0);
 
   // Add dynamically computed OVERDUE slice to invoices distribution if there are overdue invoices
   if (overdueInvoiceCount > 0) {
@@ -351,10 +328,10 @@ export async function getDashboardFinancialMetrics(filters: DashboardFilterParam
     });
   }
 
-  // Format Subscriptions Distribution Chart
-  const subscriptionsDistribution = subscriptionsByStatusRaw.map((item) => ({
+  // Format Subscriptions Distribution Chart directly from single run-rate query
+  const subscriptionsDistribution = subscriptionsMonthlyValueRaw.map((item) => ({
     name: item.status,
-    count: Number(item.count),
+    count: item.count,
     color: "",
     totalPaise: Number(item.monthlyValue),
   }));
@@ -390,11 +367,11 @@ export async function getDashboardFinancialMetrics(filters: DashboardFilterParam
   }));
 
   // Format Table C: Subscriptions Summary by Status
-  const formattedSubStatusSummary = subscriptionsByStatusRaw.map((row) => ({
-    status: row.status,
-    count: Number(row.count),
-    percentage: totalSubsCount > 0 ? (Number(row.count) / totalSubsCount) * 100 : 0,
-    monthlyValue: Number(row.monthlyValue),
+  const formattedSubStatusSummary = subscriptionsDistribution.map((row) => ({
+    status: row.name as SubscriptionStatus,
+    count: row.count,
+    percentage: totalSubsCount > 0 ? (row.count / totalSubsCount) * 100 : 0,
+    monthlyValue: row.totalPaise,
   }));
 
   return {

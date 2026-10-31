@@ -272,6 +272,7 @@ model Subscription {
   @@index([customerId])
   @@index([nextBillingDate])
   @@index([planId])
+  @@index([createdAt])
 }
 
 model SubscriptionLine {
@@ -326,6 +327,9 @@ model Invoice {
   @@index([customerId])
   @@index([dueDate])
   @@index([subscriptionId])
+  @@index([status, dueDate])
+  @@index([issuedDate])
+  @@index([createdAt])
 }
 
 model InvoiceLine {
@@ -366,4 +370,6 @@ model Payment {
   // Indexes as required
   @@index([paymentDate])
   @@index([invoiceId])
+  @@index([method])
+  @@index([createdAt])
 }

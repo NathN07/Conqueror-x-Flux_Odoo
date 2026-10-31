@@ -7,7 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "prisma:generate": "prisma generate"
+    "prisma:generate": "prisma generate",
+    "seed:large": "tsx prisma/seed-large.ts",
+    "seed:large:clean": "tsx prisma/seed-large-clean.ts",
+    "perf:check": "tsx scripts/perf-check.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

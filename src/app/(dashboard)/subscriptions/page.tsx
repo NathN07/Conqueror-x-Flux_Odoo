@@ -60,25 +60,104 @@ export default async function SubscriptionsListPage({ searchParams }: PageProps)
     ];
   }
 
-  // Fetch count and paginated items in parallel
-  const [totalCount, subscriptions] = await Promise.all([
-    prisma.subscription.count({ where }),
-    prisma.subscription.findMany({
-      where,
-      include: {
-        customer: {
-          select: { id: true, name: true, email: true },
+  // Fetch count and paginated items
+  let totalCount = 0;
+  let subscriptions: Array<{
+    id: string;
+    subscriptionNumber: string;
+    status: SubscriptionStatus;
+    nextBillingDate: Date | null;
+    createdAt: Date;
+    customer: { id?: string; name: string; email: string };
+    plan: { id?: string; name: string; billingFrequency: any };
+    lines: Array<{ lineAmount: number }>;
+  }> = [];
+
+  if (!query && (!statusFilter || statusFilter === "ALL")) {
+    const [count, rows] = await Promise.all([
+      prisma.subscription.count(),
+      prisma.$queryRaw<
+        Array<{
+          id: string;
+          subscriptionNumber: string;
+          status: SubscriptionStatus;
+          nextBillingDate: Date | null;
+          createdAt: Date;
+          customerId: string;
+          customerName: string;
+          customerEmail: string;
+          planId: string;
+          planName: string;
+          billingFrequency: any;
+          totalLineAmount: number;
+        }>
+      >`
+        SELECT
+          s.id,
+          s."subscriptionNumber",
+          s.status,
+          s."nextBillingDate",
+          s."createdAt",
+          u.id as "customerId",
+          u.name as "customerName",
+          u.email as "customerEmail",
+          p.id as "planId",
+          p.name as "planName",
+          p."billingFrequency",
+          COALESCE(SUM(sl."lineAmount"), 0)::int as "totalLineAmount"
+        FROM (
+          SELECT id, "subscriptionNumber", status, "nextBillingDate", "createdAt", "customerId", "planId"
+          FROM "Subscription"
+          ORDER BY "createdAt" DESC
+          LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}
+        ) s
+        JOIN "User" u ON s."customerId" = u.id
+        JOIN "Plan" p ON s."planId" = p.id
+        LEFT JOIN "SubscriptionLine" sl ON s.id = sl."subscriptionId"
+        GROUP BY s.id, s."subscriptionNumber", s.status, s."nextBillingDate", s."createdAt", u.id, u.name, u.email, p.id, p.name, p."billingFrequency"
+        ORDER BY s."createdAt" DESC
+      `,
+    ]);
+    totalCount = count;
+    subscriptions = rows.map((r) => ({
+      id: r.id,
+      subscriptionNumber: r.subscriptionNumber,
+      status: r.status,
+      nextBillingDate: r.nextBillingDate,
+      createdAt: r.createdAt,
+      customer: { id: r.customerId, name: r.customerName, email: r.customerEmail },
+      plan: { id: r.planId, name: r.planName, billingFrequency: r.billingFrequency },
+      lines: [{ lineAmount: Number(r.totalLineAmount) }],
+    }));
+  } else {
+    const [count, items] = await Promise.all([
+      prisma.subscription.count({ where }),
+      prisma.subscription.findMany({
+        where,
+        select: {
+          id: true,
+          subscriptionNumber: true,
+          status: true,
+          nextBillingDate: true,
+          createdAt: true,
+          customer: {
+            select: { id: true, name: true, email: true },
+          },
+          plan: {
+            select: { id: true, name: true, billingFrequency: true },
+          },
+          lines: {
+            select: { lineAmount: true },
+          },
         },
-        plan: {
-          select: { id: true, name: true, billingFrequency: true },
-        },
-        lines: true,
-      },
-      orderBy: { createdAt: "desc" },
-      skip: (page - 1) * pageSize,
-      take: pageSize,
-    }),
-  ]);
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+    totalCount = count;
+    subscriptions = items;
+  }
 
   const totalPages = Math.ceil(totalCount / pageSize);
 

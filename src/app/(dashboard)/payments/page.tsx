@@ -91,32 +91,163 @@ export default async function PaymentsListPage({ searchParams }: PageProps) {
     ];
   }
 
-  // Fetch count, payments, and payable invoices concurrently
-  const [totalCount, payments, confirmedInvoices] = await Promise.all([
-    prisma.payment.count({ where }),
-    prisma.payment.findMany({
-      where,
-      include: {
-        invoice: {
-          include: {
-            customer: {
-              select: { id: true, name: true, email: true },
+  let totalCount = 0;
+  let payments: any[] = [];
+  let confirmedInvoices: any[] = [];
+
+  const isDefaultView = !methodFilter && !startDate && !endDate && !query;
+
+  if (isDefaultView) {
+    const rows = await prisma.$queryRaw<
+      Array<{
+        total_count: number;
+        id: string;
+        amount: number;
+        method: PaymentMethod;
+        paymentDate: Date;
+        transactionRef: string | null;
+        notes: string | null;
+        invoiceId: string;
+        invoiceNumber: string;
+        invoiceStatus: InvoiceStatus;
+        totalAmount: number;
+        amountPaid: number;
+        customerId: string;
+        customerName: string;
+        customerEmail: string;
+      }>
+    >`
+      WITH payment_count AS (
+        SELECT COUNT(*)::int as cnt FROM "Payment"
+      )
+      SELECT
+        payment_count.cnt as total_count,
+        p.id,
+        p.amount,
+        p.method,
+        p."paymentDate",
+        p."transactionRef",
+        p.notes,
+        i.id as "invoiceId",
+        i."invoiceNumber",
+        i.status as "invoiceStatus",
+        i."totalAmount",
+        i."amountPaid",
+        u.id as "customerId",
+        u.name as "customerName",
+        u.email as "customerEmail"
+      FROM payment_count,
+      (
+        SELECT id, amount, method, "paymentDate", "transactionRef", notes, "invoiceId"
+        FROM "Payment"
+        ORDER BY "paymentDate" DESC
+        LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}
+      ) p
+      JOIN "Invoice" i ON p."invoiceId" = i.id
+      JOIN "User" u ON i."customerId" = u.id
+      ORDER BY p."paymentDate" DESC
+    `;
+
+    const invoices = await prisma.$queryRaw<
+      Array<{
+        id: string;
+        invoiceNumber: string;
+        status: InvoiceStatus;
+        totalAmount: number;
+        amountPaid: number;
+        customerName: string;
+      }>
+    >`
+      SELECT
+        i.id,
+        i."invoiceNumber",
+        i.status,
+        i."totalAmount",
+        i."amountPaid",
+        u.name as "customerName"
+      FROM (
+        SELECT id, "invoiceNumber", status, "totalAmount", "amountPaid", "customerId"
+        FROM "Invoice"
+        WHERE status = 'CONFIRMED'
+        ORDER BY "issuedDate" DESC
+        LIMIT 20
+      ) i
+      JOIN "User" u ON i."customerId" = u.id
+    `;
+
+    totalCount = rows.length > 0 ? rows[0].total_count : 0;
+    payments = rows.map((r) => ({
+      id: r.id,
+      amount: r.amount,
+      method: r.method,
+      paymentDate: r.paymentDate,
+      transactionRef: r.transactionRef,
+      notes: r.notes,
+      invoice: {
+        id: r.invoiceId,
+        invoiceNumber: r.invoiceNumber,
+        status: r.invoiceStatus,
+        totalAmount: r.totalAmount,
+        amountPaid: r.amountPaid,
+        customer: { id: r.customerId, name: r.customerName, email: r.customerEmail },
+      },
+    }));
+    confirmedInvoices = invoices.map((inv) => ({
+      id: inv.id,
+      invoiceNumber: inv.invoiceNumber,
+      status: inv.status,
+      totalAmount: inv.totalAmount,
+      amountPaid: inv.amountPaid,
+      customer: { name: inv.customerName },
+    }));
+  } else {
+    // Fetch count, payments, and payable invoices concurrently
+    const [count, items, invoices] = await Promise.all([
+      prisma.payment.count({ where }),
+      prisma.payment.findMany({
+        where,
+        select: {
+          id: true,
+          amount: true,
+          method: true,
+          paymentDate: true,
+          transactionRef: true,
+          notes: true,
+          invoice: {
+            select: {
+              id: true,
+              invoiceNumber: true,
+              status: true,
+              totalAmount: true,
+              amountPaid: true,
+              customer: {
+                select: { id: true, name: true, email: true },
+              },
             },
           },
         },
-      },
-      orderBy: { paymentDate: "desc" },
-      skip: (page - 1) * pageSize,
-      take: pageSize,
-    }),
-    prisma.invoice.findMany({
-      where: { status: InvoiceStatus.CONFIRMED },
-      include: {
-        customer: { select: { name: true } },
-      },
-      orderBy: { issuedDate: "desc" },
-    }),
-  ]);
+        orderBy: { paymentDate: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      prisma.invoice.findMany({
+        where: { status: InvoiceStatus.CONFIRMED },
+        select: {
+          id: true,
+          invoiceNumber: true,
+          status: true,
+          totalAmount: true,
+          amountPaid: true,
+          customer: { select: { name: true } },
+        },
+        orderBy: { issuedDate: "desc" },
+        take: 20,
+      }),
+    ]);
+    totalCount = count;
+    payments = items;
+    confirmedInvoices = invoices;
+  }
 
   const totalPages = Math.ceil(totalCount / pageSize);
 

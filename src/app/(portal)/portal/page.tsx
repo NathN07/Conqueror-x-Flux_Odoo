@@ -23,34 +23,74 @@ export default async function CustomerPortalOverviewPage() {
     redirect("/login");
   }
 
-  // Security: Query ONLY by logged-in user's ID
-  const [subscriptions, invoices] = await Promise.all([
+  // Security: Query ONLY by logged-in user's ID with lean bounded queries
+  const [subMeta, recentSubscriptions, confirmedInvoices, recentInvoices] = await Promise.all([
+    // Lean metadata for counters & next billing date
     prisma.subscription.findMany({
       where: { customerId: user.id },
-      include: {
-        plan: true,
+      select: {
+        id: true,
+        status: true,
+        nextBillingDate: true,
+      },
+    }),
+    // Recent subscriptions for list (only 5 items)
+    prisma.subscription.findMany({
+      where: { customerId: user.id },
+      select: {
+        id: true,
+        subscriptionNumber: true,
+        status: true,
+        startDate: true,
+        nextBillingDate: true,
+        plan: {
+          select: { name: true, billingFrequency: true },
+        },
         lines: {
-          include: { product: true, variant: true },
+          select: { lineAmount: true },
         },
       },
       orderBy: { createdAt: "desc" },
+      take: 5,
     }),
+    // Outstanding invoices for Amount Due
     prisma.invoice.findMany({
       where: {
         customerId: user.id,
-        status: { in: [InvoiceStatus.CONFIRMED, InvoiceStatus.PAID] }, // Only CONFIRMED or PAID
+        status: InvoiceStatus.CONFIRMED,
       },
-      include: {
-        subscription: true,
+      select: {
+        id: true,
+        totalAmount: true,
+        amountPaid: true,
+      },
+    }),
+    // Recent invoices for list (only 5 items)
+    prisma.invoice.findMany({
+      where: {
+        customerId: user.id,
+        status: { in: [InvoiceStatus.CONFIRMED, InvoiceStatus.PAID] },
+      },
+      select: {
+        id: true,
+        invoiceNumber: true,
+        status: true,
+        totalAmount: true,
+        amountPaid: true,
+        dueDate: true,
+        issuedDate: true,
+        subscription: {
+          select: { subscriptionNumber: true },
+        },
       },
       orderBy: { issuedDate: "desc" },
+      take: 5,
     }),
   ]);
 
   const now = new Date();
-
-  // 1. Active Subscriptions Count
-  const activeSubs = subscriptions.filter(
+  const totalSubscriptionsCount = subMeta.length;
+  const activeSubs = subMeta.filter(
     (s) => s.status === SubscriptionStatus.ACTIVE
   );
 
@@ -62,13 +102,13 @@ export default async function CustomerPortalOverviewPage() {
   const nextBillingDate = activeBillingDates[0] || null;
 
   // 3. Amount Due (Outstanding on CONFIRMED invoices)
-  const confirmedInvoices = invoices.filter(
-    (inv) => inv.status === InvoiceStatus.CONFIRMED
-  );
   const totalAmountDuePaise = confirmedInvoices.reduce(
     (acc, inv) => acc + Math.max(0, inv.totalAmount - inv.amountPaid),
     0
   );
+  const totalInvoicesCount = confirmedInvoices.length + recentInvoices.filter(i => i.status === InvoiceStatus.PAID).length;
+  const subscriptions = recentSubscriptions;
+  const invoices = recentInvoices;
 
   const getSubStatusBadge = (status: SubscriptionStatus) => {
     switch (status) {
@@ -113,7 +153,7 @@ export default async function CustomerPortalOverviewPage() {
             {activeSubs.length}
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            {subscriptions.length} total contract(s) on file
+            {totalSubscriptionsCount} total contract(s) on file
           </p>
         </div>
 
@@ -174,7 +214,7 @@ export default async function CustomerPortalOverviewPage() {
               href="/portal/subscriptions"
               className="flex items-center gap-1 text-blue-600 hover:text-blue-700"
             >
-              View all ({subscriptions.length})
+              View all ({totalSubscriptionsCount})
               <ArrowRight className="h-4 w-4" />
             </Link>
           </Button>

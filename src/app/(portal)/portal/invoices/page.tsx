@@ -20,8 +20,21 @@ export default async function CustomerInvoicesListPage() {
       customerId: user.id,
       status: { in: [InvoiceStatus.CONFIRMED, InvoiceStatus.PAID] },
     },
-    include: {
-      subscription: true,
+    select: {
+      id: true,
+      invoiceNumber: true,
+      status: true,
+      dueDate: true,
+      issuedDate: true,
+      periodStart: true,
+      periodEnd: true,
+      totalAmount: true,
+      amountPaid: true,
+      subscription: {
+        select: {
+          subscriptionNumber: true,
+        },
+      },
     },
     orderBy: { issuedDate: "desc" },
   });

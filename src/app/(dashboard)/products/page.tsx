@@ -51,24 +51,36 @@ export default async function ProductsListPage({ searchParams }: PageProps) {
     ];
   }
 
-  const [totalCount, products] = await Promise.all([
-    prisma.product.count({ where }),
-    prisma.product.findMany({
-      where,
-      include: {
-        variants: true,
-        _count: {
-          select: {
-            subscriptionLines: true,
-            invoiceLines: true,
-          },
+  const totalCount = await prisma.product.count({ where });
+  const products = await prisma.product.findMany({
+    where,
+    select: {
+      id: true,
+      name: true,
+      type: true,
+      salesPrice: true,
+      costPrice: true,
+      notes: true,
+      isActive: true,
+      variants: {
+        select: {
+          id: true,
+          name: true,
+          priceSurcharge: true,
+          isActive: true,
         },
       },
-      orderBy: { createdAt: "desc" },
-      skip: (page - 1) * pageSize,
-      take: pageSize,
-    }),
-  ]);
+      _count: {
+        select: {
+          subscriptionLines: true,
+          invoiceLines: true,
+        },
+      },
+    },
+    orderBy: { createdAt: "desc" },
+    skip: (page - 1) * pageSize,
+    take: pageSize,
+  });
 
   const totalPages = Math.ceil(totalCount / pageSize);
 

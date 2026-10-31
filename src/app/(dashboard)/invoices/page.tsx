@@ -73,23 +73,118 @@ export default async function InvoicesListPage({ searchParams }: PageProps) {
     ];
   }
 
-  const [totalCount, invoices] = await Promise.all([
-    prisma.invoice.count({ where }),
-    prisma.invoice.findMany({
-      where,
-      include: {
-        customer: {
-          select: { id: true, name: true, email: true },
+  // Fetch count and paginated items
+  let totalCount = 0;
+  let invoices: Array<{
+    id: string;
+    invoiceNumber: string;
+    status: InvoiceStatus;
+    dueDate: Date;
+    issuedDate: Date;
+    periodStart: Date;
+    periodEnd: Date;
+    totalAmount: number;
+    amountPaid: number;
+    customer: { id?: string; name: string; email: string };
+    subscription: { id?: string; subscriptionNumber: string };
+  }> = [];
+
+  if (
+    !query &&
+    !isOverdueFilter &&
+    !isOutstandingFilter &&
+    (!statusFilter || statusFilter === "ALL")
+  ) {
+    const [count, rows] = await Promise.all([
+      prisma.invoice.count(),
+      prisma.$queryRaw<
+        Array<{
+          id: string;
+          invoiceNumber: string;
+          status: InvoiceStatus;
+          dueDate: Date;
+          issuedDate: Date;
+          periodStart: Date;
+          periodEnd: Date;
+          totalAmount: number;
+          amountPaid: number;
+          customerId: string;
+          customerName: string;
+          customerEmail: string;
+          subscriptionId: string;
+          subscriptionNumber: string;
+        }>
+      >`
+        SELECT
+          i.id,
+          i."invoiceNumber",
+          i.status,
+          i."dueDate",
+          i."issuedDate",
+          i."periodStart",
+          i."periodEnd",
+          i."totalAmount",
+          i."amountPaid",
+          u.id as "customerId",
+          u.name as "customerName",
+          u.email as "customerEmail",
+          s.id as "subscriptionId",
+          s."subscriptionNumber"
+        FROM (
+          SELECT id, "invoiceNumber", status, "dueDate", "issuedDate", "periodStart", "periodEnd", "totalAmount", "amountPaid", "customerId", "subscriptionId"
+          FROM "Invoice"
+          ORDER BY "issuedDate" DESC
+          LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}
+        ) i
+        JOIN "User" u ON i."customerId" = u.id
+        JOIN "Subscription" s ON i."subscriptionId" = s.id
+        ORDER BY i."issuedDate" DESC
+      `,
+    ]);
+    totalCount = count;
+    invoices = rows.map((r) => ({
+      id: r.id,
+      invoiceNumber: r.invoiceNumber,
+      status: r.status,
+      dueDate: r.dueDate,
+      issuedDate: r.issuedDate,
+      periodStart: r.periodStart,
+      periodEnd: r.periodEnd,
+      totalAmount: r.totalAmount,
+      amountPaid: r.amountPaid,
+      customer: { id: r.customerId, name: r.customerName, email: r.customerEmail },
+      subscription: { id: r.subscriptionId, subscriptionNumber: r.subscriptionNumber },
+    }));
+  } else {
+    const [count, items] = await Promise.all([
+      prisma.invoice.count({ where }),
+      prisma.invoice.findMany({
+        where,
+        select: {
+          id: true,
+          invoiceNumber: true,
+          status: true,
+          dueDate: true,
+          issuedDate: true,
+          periodStart: true,
+          periodEnd: true,
+          totalAmount: true,
+          amountPaid: true,
+          customer: {
+            select: { id: true, name: true, email: true },
+          },
+          subscription: {
+            select: { id: true, subscriptionNumber: true },
+          },
         },
-        subscription: {
-          select: { id: true, subscriptionNumber: true },
-        },
-      },
-      orderBy: { issuedDate: "desc" },
-      skip: (page - 1) * pageSize,
-      take: pageSize,
-    }),
-  ]);
+        orderBy: { issuedDate: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+    totalCount = count;
+    invoices = items;
+  }
 
   const totalPages = Math.ceil(totalCount / pageSize);
 

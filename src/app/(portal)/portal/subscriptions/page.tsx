@@ -17,10 +17,35 @@ export default async function CustomerSubscriptionsListPage() {
   // Security: Query ONLY by logged-in user's ID
   const subscriptions = await prisma.subscription.findMany({
     where: { customerId: user.id },
-    include: {
-      plan: true,
+    select: {
+      id: true,
+      subscriptionNumber: true,
+      status: true,
+      startDate: true,
+      expiryDate: true,
+      nextBillingDate: true,
+      plan: {
+        select: {
+          id: true,
+          name: true,
+          billingFrequency: true,
+          allowPause: true,
+          allowEarlyClose: true,
+          allowRenewal: true,
+        },
+      },
       lines: {
-        include: { product: true, variant: true },
+        select: {
+          id: true,
+          lineAmount: true,
+          quantity: true,
+          product: {
+            select: { name: true },
+          },
+          variant: {
+            select: { name: true },
+          },
+        },
       },
     },
     orderBy: { createdAt: "desc" },
