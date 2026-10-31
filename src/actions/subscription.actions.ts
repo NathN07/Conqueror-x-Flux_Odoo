@@ -1,7 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
-import { requireRole } from "@/lib/auth";
+import { requireRole, getCurrentUser } from "@/lib/auth";
 import { Role, SubscriptionStatus } from "@prisma/client";
 import {
   createSubscriptionFromScratchSchema,
@@ -413,5 +413,101 @@ export async function triggerCloseExpiredAction(): Promise<
   return {
     success: true,
     data: result,
+  };
+}
+
+/**
+ * Customer Action: Update own subscription status (Pause, Resume, Close, Renew)
+ * Strictly verifies ownership by checking customerId === user.id.
+ */
+export async function customerUpdateSubscriptionStatusAction(
+  rawInput: UpdateSubscriptionStatusInput
+): Promise<ActionResponse<{ id: string; status: SubscriptionStatus }>> {
+  const user = await getCurrentUser();
+  if (!user) {
+    return { success: false, error: "Authentication required." };
+  }
+
+  const parsed = updateSubscriptionStatusSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return {
+      success: false,
+      error: "Invalid input parameters.",
+      fieldErrors: parsed.error.flatten().fieldErrors,
+    };
+  }
+
+  const { subscriptionId, targetStatus, isRenewal } = parsed.data;
+
+  // Security: Query ONLY by id AND customerId
+  const subscription = await prisma.subscription.findFirst({
+    where: {
+      id: subscriptionId,
+      customerId: user.id,
+    },
+    include: { plan: true },
+  });
+
+  if (!subscription) {
+    return { success: false, error: "Subscription not found or access denied." };
+  }
+
+  // Validate state transition using pure canTransition function
+  const transitionCheck = canTransition(
+    subscription.status,
+    targetStatus,
+    {
+      allowPause: subscription.plan.allowPause,
+      allowEarlyClose: subscription.plan.allowEarlyClose,
+      allowRenewal: subscription.plan.allowRenewal,
+      autoCloseOnEnd: subscription.plan.autoCloseOnEnd,
+    },
+    isRenewal
+  );
+
+  if (!transitionCheck.allowed) {
+    return {
+      success: false,
+      error: transitionCheck.error || "Transition not allowed by plan rules.",
+    };
+  }
+
+  const updateData: any = {
+    status: targetStatus,
+  };
+
+  if (targetStatus === SubscriptionStatus.ACTIVE) {
+    if (isRenewal) {
+      const nowUtc = new Date();
+      updateData.startDate = nowUtc;
+      updateData.nextBillingDate = calculateNextBillingDate(
+        nowUtc,
+        subscription.plan.billingFrequency
+      );
+      updateData.expiryDate = calculateNextBillingDate(
+        nowUtc,
+        subscription.plan.billingFrequency
+      );
+    } else if (subscription.status !== SubscriptionStatus.PAUSED) {
+      updateData.nextBillingDate =
+        subscription.nextBillingDate ?? subscription.startDate;
+    }
+  }
+
+  const updated = await prisma.subscription.update({
+    where: { id: subscription.id },
+    data: updateData,
+  });
+
+  revalidatePath(`/portal/subscriptions/${subscription.id}`);
+  revalidatePath("/portal/subscriptions");
+  revalidatePath("/portal");
+
+  return {
+    success: true,
+    data: {
+      id: updated.id,
+      status: updated.status,
+    },
   };
 }

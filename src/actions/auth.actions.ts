@@ -8,6 +8,7 @@ import {
   signSessionToken,
   setSessionCookie,
   clearSessionCookie,
+  getCurrentUser,
   requireRole,
 } from "@/lib/auth";
 import {
@@ -16,11 +17,13 @@ import {
   forgotPasswordSchema,
   resetPasswordSchema,
   createStaffSchema,
+  changePasswordSchema,
   type SignupInput,
   type LoginInput,
   type ForgotPasswordInput,
   type ResetPasswordInput,
   type CreateStaffInput,
+  type ChangePasswordInput,
 } from "@/lib/validations/auth";
 import { sendPasswordResetEmail } from "@/lib/mail";
 import { Role } from "@prisma/client";
@@ -328,5 +331,63 @@ export async function createStaffAction(
   return {
     success: true,
     data: staff,
+  };
+}
+
+/**
+ * Customer / User Action: Change Password
+ */
+export async function changePasswordAction(
+  rawInput: ChangePasswordInput
+): Promise<ActionResponse<{ message: string }>> {
+  const user = await getCurrentUser();
+  if (!user) {
+    return {
+      success: false,
+      error: "You must be logged in to change your password.",
+    };
+  }
+
+  const result = changePasswordSchema.safeParse(rawInput);
+  if (!result.success) {
+    return {
+      success: false,
+      error: "Please fix the validation errors below.",
+      fieldErrors: result.error.flatten().fieldErrors,
+    };
+  }
+
+  const { currentPassword, newPassword } = result.data;
+
+  // Retrieve current user with passwordHash
+  const userRecord = await prisma.user.findUnique({
+    where: { id: user.id },
+  });
+
+  if (!userRecord) {
+    return { success: false, error: "User record not found." };
+  }
+
+  const isCurrentValid = await verifyPassword(currentPassword, userRecord.passwordHash);
+  if (!isCurrentValid) {
+    return {
+      success: false,
+      fieldErrors: {
+        currentPassword: ["Current password is incorrect."],
+      },
+      error: "Current password is incorrect.",
+    };
+  }
+
+  const newPasswordHash = await hashPassword(newPassword);
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { passwordHash: newPasswordHash },
+  });
+
+  return {
+    success: true,
+    data: { message: "Your password has been changed successfully." },
   };
 }
