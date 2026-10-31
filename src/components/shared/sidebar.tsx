@@ -18,6 +18,16 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { LogoutButton } from "./logout-button";
+import { Role } from "@prisma/client";
+
+interface SidebarProps {
+  user?: {
+    name: string;
+    email: string;
+    role: Role;
+  } | null;
+}
 
 interface NavItem {
   title: string;
@@ -69,11 +79,13 @@ const catalogNavItems: NavItem[] = [
     title: "Discounts & Promos",
     href: "/discounts",
     icon: Percent,
+    adminOnly: true, // Staff cannot open /discounts
   },
   {
     title: "Tax Rules",
     href: "/taxes",
     icon: Calculator,
+    adminOnly: true, // Staff cannot open /taxes
   },
 ];
 
@@ -87,12 +99,30 @@ const managementNavItems: NavItem[] = [
     title: "Staff Members",
     href: "/staff",
     icon: ShieldCheck,
-    adminOnly: true,
+    adminOnly: true, // Staff cannot open /staff
   },
 ];
 
-export function Sidebar() {
+export function Sidebar({ user }: SidebarProps) {
   const pathname = usePathname();
+  const isAdmin = user?.role === Role.ADMIN;
+
+  // Filter items based on user role
+  const visibleCatalogItems = catalogNavItems.filter(
+    (item) => !item.adminOnly || isAdmin
+  );
+  const visibleManagementItems = managementNavItems.filter(
+    (item) => !item.adminOnly || isAdmin
+  );
+
+  const initials = user?.name
+    ? user.name
+        .split(" ")
+        .map((n) => n[0])
+        .slice(0, 2)
+        .join("")
+        .toUpperCase()
+    : "BL";
 
   return (
     <aside className="fixed left-0 top-0 z-40 flex h-screen w-64 flex-col border-r bg-slate-900 text-slate-100">
@@ -144,7 +174,7 @@ export function Sidebar() {
             Catalog & Rules
           </p>
           <nav className="space-y-1">
-            {catalogNavItems.map((item) => {
+            {visibleCatalogItems.map((item) => {
               const Icon = item.icon;
               const isActive = pathname === item.href;
               return (
@@ -174,7 +204,7 @@ export function Sidebar() {
             Management
           </p>
           <nav className="space-y-1">
-            {managementNavItems.map((item) => {
+            {visibleManagementItems.map((item) => {
               const Icon = item.icon;
               const isActive = pathname === item.href;
               return (
@@ -204,20 +234,37 @@ export function Sidebar() {
         </div>
       </div>
 
-      {/* User / Session Footer */}
-      <div className="border-t border-slate-800 p-4">
+      {/* User / Session Footer with Logout */}
+      <div className="border-t border-slate-800 p-4 space-y-3">
         <div className="flex items-center gap-3 rounded-lg bg-slate-800/60 p-2.5">
           <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-600 text-sm font-semibold text-white">
-            AD
+            {initials}
           </div>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-white">Admin User</p>
-            <p className="truncate text-xs text-slate-400">admin@brightloop.com</p>
+            <p className="truncate text-sm font-medium text-white">
+              {user?.name || "Anonymous"}
+            </p>
+            <p className="truncate text-xs text-slate-400">
+              {user?.email || "No email"}
+            </p>
           </div>
-          <span className="rounded bg-blue-900/60 px-2 py-0.5 text-[10px] font-medium text-blue-300">
-            ADMIN
+          <span
+            className={cn(
+              "rounded px-2 py-0.5 text-[10px] font-medium",
+              user?.role === Role.ADMIN
+                ? "bg-blue-900/60 text-blue-300 border border-blue-700/50"
+                : "bg-amber-900/60 text-amber-300 border border-amber-700/50"
+            )}
+          >
+            {user?.role || "GUEST"}
           </span>
         </div>
+
+        <LogoutButton
+          variant="outline"
+          size="sm"
+          className="w-full border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white justify-center"
+        />
       </div>
     </aside>
   );
