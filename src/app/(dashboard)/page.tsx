@@ -1,162 +1,126 @@
-import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/auth";
-import { Role, SubscriptionStatus } from "@prisma/client";
+import { Role } from "@prisma/client";
+import { getDashboardFinancialMetrics, type DashboardFilterParams } from "@/lib/dashboard-analytics";
+import { DashboardSummaryCards } from "@/components/dashboard/dashboard-cards";
+import { DashboardFilters } from "@/components/dashboard/dashboard-filters";
+import { DashboardCharts } from "@/components/dashboard/dashboard-charts";
+import { DashboardTables } from "@/components/dashboard/dashboard-tables";
+import Link from "next/link";
 import {
+  LayoutDashboard,
+  Plus,
+  CreditCard,
   Layers,
   Receipt,
-  CreditCard,
-  Users,
-  ArrowUpRight,
-  Plus,
+  Play,
 } from "lucide-react";
-import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { formatPaiseToInr } from "@/lib/money";
 
-export default async function DashboardPage() {
-  await requireRole(Role.ADMIN, Role.STAFF);
+interface PageProps {
+  searchParams: DashboardFilterParams;
+}
 
-  // Parallel database metrics query
-  const [activeSubs, totalCustomers, totalInvoices, allActiveSubscriptions] =
-    await Promise.all([
-      prisma.subscription.count({
-        where: { status: SubscriptionStatus.ACTIVE },
-      }),
-      prisma.user.count({
-        where: { role: Role.CUSTOMER },
-      }),
-      prisma.invoice.count(),
-      prisma.subscription.findMany({
-        where: { status: SubscriptionStatus.ACTIVE },
-        include: {
-          plan: true,
-          lines: true,
-        },
-      }),
-    ]);
+export default async function DashboardPage({ searchParams }: PageProps) {
+  const user = await requireRole(Role.ADMIN, Role.STAFF);
+  const isAdmin = user.role === Role.ADMIN;
+  const isSummaryView = searchParams.view === "summary";
 
-  // Compute normalized MRR in paise from active subscriptions
-  let mrrPaise = 0;
-  for (const sub of allActiveSubscriptions) {
-    const subtotal = sub.lines.reduce((acc, line) => acc + line.lineAmount, 0);
-    switch (sub.plan.billingFrequency) {
-      case "DAILY":
-        mrrPaise += subtotal * 30;
-        break;
-      case "WEEKLY":
-        mrrPaise += Math.round(subtotal * 4.33);
-        break;
-      case "MONTHLY":
-        mrrPaise += subtotal;
-        break;
-      case "YEARLY":
-        mrrPaise += Math.round(subtotal / 12);
-        break;
-    }
-  }
-
-  const cards = [
-    {
-      title: "Active Subscriptions",
-      value: String(activeSubs),
-      description: "Contracts currently renewing",
-      icon: Layers,
-      color: "text-blue-600 bg-blue-50 border-blue-100",
-      href: "/subscriptions?status=ACTIVE",
-    },
-    {
-      title: "Normalized Monthly MRR",
-      value: formatPaiseToInr(mrrPaise),
-      description: "Recurring revenue run rate",
-      icon: ArrowUpRight,
-      color: "text-emerald-600 bg-emerald-50 border-emerald-100",
-      href: "/subscriptions",
-    },
-    {
-      title: "Total Invoices",
-      value: String(totalInvoices),
-      description: "Billing statements generated",
-      icon: Receipt,
-      color: "text-amber-600 bg-amber-50 border-amber-100",
-      href: "/invoices",
-    },
-    {
-      title: "Direct Customers",
-      value: String(totalCustomers),
-      description: "Registered accounts in directory",
-      icon: Users,
-      color: "text-purple-600 bg-purple-50 border-purple-100",
-      href: "/customers",
-    },
-  ];
+  // Fetch all aggregated financial metrics and paginated records concurrently
+  const metrics = await getDashboardFinancialMetrics(searchParams);
 
   return (
     <div className="space-y-8">
-      {/* Welcome Banner */}
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+      {/* Welcome & Quick Action Bar */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-            Billing & Subscription Overview
-          </h1>
-          <p className="text-sm text-slate-500">
-            Real-time pulse of Brightloop recurring revenue, cycles, and accounts receivable.
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+              Finance & Operations Executive Dashboard
+            </h1>
+            <span
+              className={`rounded px-2 py-0.5 text-xs font-semibold ${
+                isAdmin
+                  ? "bg-blue-100 text-blue-700"
+                  : "bg-slate-100 text-slate-600"
+              }`}
+            >
+              {user.role}
+            </span>
+          </div>
+          <p className="mt-1 text-sm text-slate-500">
+            Real-time monthly run rate (MRR), cash collection velocity, and accounts receivable aging.
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <Button asChild>
-            <Link href="/subscriptions/new" className="flex items-center gap-1.5">
-              <Plus className="h-4 w-4" />
-              New Subscription
-            </Link>
-          </Button>
-        </div>
-      </div>
 
-      {/* KPI Stats Grid */}
-      <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        {cards.map((card) => {
-          const Icon = card.icon;
-          return (
-            <Link
-              key={card.title}
-              href={card.href}
-              className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm transition hover:shadow-md hover:border-slate-300"
+        {/* Quick Launch Buttons */}
+        <div className="flex flex-wrap items-center gap-2">
+          <Link href="/subscriptions/new">
+            <Button
+              size="sm"
+              className="bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-1.5 shadow-sm"
             >
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-slate-500">
-                  {card.title}
-                </span>
-                <div
-                  className={`flex h-10 w-10 items-center justify-center rounded-lg border ${card.color}`}
-                >
-                  <Icon className="h-5 w-5" />
-                </div>
-              </div>
-              <div className="mt-4">
-                <p className="text-2xl font-bold text-slate-900">{card.value}</p>
-                <p className="mt-1 text-xs text-slate-500">{card.description}</p>
-              </div>
-            </Link>
-          );
-        })}
-      </div>
+              <Plus className="h-4 w-4" />
+              <span>New Subscription</span>
+            </Button>
+          </Link>
 
-      {/* Quick Launch Card */}
-      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex items-center justify-between border-b pb-4">
-          <div>
-            <h2 className="text-base font-semibold text-slate-900">
-              Subscription Management Engine Ready
-            </h2>
-            <p className="mt-0.5 text-xs text-slate-500">
-              Pure state machine enforced (Draft → Quotation → Confirmed → Active ⇄ Paused → Closed) with integer paise calculations.
-            </p>
-          </div>
-          <Button asChild variant="outline" size="sm">
-            <Link href="/subscriptions">Open Subscriptions Directory</Link>
-          </Button>
+          <Link href="/payments">
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-slate-200 text-slate-700 hover:bg-slate-50 flex items-center gap-1.5"
+            >
+              <CreditCard className="h-4 w-4 text-emerald-600" />
+              <span>Record Payment</span>
+            </Button>
+          </Link>
         </div>
       </div>
+
+      {/* URL Filter Bar */}
+      <DashboardFilters
+        customers={metrics.filterOptions.customers}
+        plans={metrics.filterOptions.plans}
+        currentFilters={searchParams}
+      />
+
+      {/* 6 Summary Cards */}
+      <DashboardSummaryCards data={metrics.summaryCards} />
+
+      {/* Recharts Analytics Charts */}
+      <DashboardCharts
+        monthlyRevenue={metrics.charts.monthlyRevenue}
+        invoicesDistribution={metrics.charts.invoicesDistribution}
+        subscriptionsDistribution={metrics.charts.subscriptionsDistribution}
+      />
+
+      {/* Paginated Tables Section (Displayed in Detail View) */}
+      {!isSummaryView && (
+        <div className="space-y-6 pt-4 border-t border-slate-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">
+                Detailed Operations & Ledgers
+              </h2>
+              <p className="text-xs text-slate-500">
+                Drill-down tables for accounts receivable debt, payment receipts, and contract status.
+              </p>
+            </div>
+          </div>
+
+          <DashboardTables
+            overdueInvoices={metrics.tables.overdueInvoices}
+            overdueTotalCount={metrics.tables.overdueTotalCount}
+            overduePage={metrics.tables.overduePage}
+            overduePageSize={metrics.tables.overduePageSize}
+            recentPayments={metrics.tables.recentPayments}
+            paymentsTotalCount={metrics.tables.paymentsTotalCount}
+            paymentsPage={metrics.tables.paymentsPage}
+            paymentsPageSize={metrics.tables.paymentsPageSize}
+            subscriptionStatusSummary={metrics.tables.subscriptionStatusSummary}
+          />
+        </div>
+      )}
     </div>
   );
 }
