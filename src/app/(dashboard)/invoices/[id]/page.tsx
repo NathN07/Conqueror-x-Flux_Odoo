@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { formatPaiseToInr } from "@/lib/money";
 import { formatUtcDate } from "@/lib/dates";
+import { getInvoiceOutstanding, isInvoiceOverdue } from "@/lib/receivables";
 import { InvoiceActions } from "./invoice-actions";
 import {
   ChevronLeft,
@@ -15,6 +16,8 @@ import {
   Receipt,
   AlertTriangle,
   Clock,
+  CreditCard,
+  CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -42,7 +45,9 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
           variant: true,
         },
       },
-      payments: true,
+      payments: {
+        orderBy: { paymentDate: "desc" },
+      },
     },
   });
 
@@ -50,12 +55,8 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
     notFound();
   }
 
-  const now = new Date();
-  const isOverdue =
-    invoice.dueDate < now &&
-    invoice.status !== InvoiceStatus.PAID &&
-    invoice.status !== InvoiceStatus.CANCELLED;
-
+  const outstanding = getInvoiceOutstanding(invoice);
+  const overdue = isInvoiceOverdue(invoice);
   const hasPayments = invoice.payments.length > 0 || invoice.amountPaid > 0;
 
   const getStatusBadge = (status: InvoiceStatus) => {
@@ -93,8 +94,10 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
         {/* Action Controls */}
         <InvoiceActions
           invoiceId={invoice.id}
+          invoiceNumber={invoice.invoiceNumber}
           status={invoice.status}
           hasPayments={hasPayments}
+          outstanding={outstanding}
         />
       </div>
 
@@ -116,7 +119,7 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
               >
                 {invoice.status}
               </span>
-              {isOverdue && (
+              {overdue && (
                 <span className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2.5 py-0.5 text-xs font-semibold text-red-700 animate-pulse">
                   <AlertTriangle className="h-3.5 w-3.5" />
                   OVERDUE
@@ -131,16 +134,25 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
         </div>
 
         <div className="text-right">
-          <p className="text-xs text-slate-500">Total Amount Due</p>
+          <p className="text-xs text-slate-500">Total Invoiced Amount</p>
           <p className="text-2xl font-bold text-slate-900">
             {formatPaiseToInr(invoice.totalAmount)}
           </p>
-          {invoice.amountPaid > 0 && (
-            <p className="text-xs font-medium text-emerald-600">
-              Paid: {formatPaiseToInr(invoice.amountPaid)} (Remaining:{" "}
-              {formatPaiseToInr(invoice.totalAmount - invoice.amountPaid)})
-            </p>
-          )}
+          <div className="flex items-center justify-end gap-3 mt-1 text-xs">
+            <span className="text-emerald-700 font-medium">
+              Paid: {formatPaiseToInr(invoice.amountPaid)}
+            </span>
+            <span className="text-slate-300">•</span>
+            <span
+              className={
+                outstanding > 0
+                  ? "font-bold text-amber-700"
+                  : "font-medium text-slate-500"
+              }
+            >
+              Outstanding: {formatPaiseToInr(outstanding)}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -203,7 +215,7 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
               <span className="text-xs text-slate-500">Due Date:</span>
               <span
                 className={`font-semibold ${
-                  isOverdue ? "text-red-600 font-bold" : "text-slate-900"
+                  overdue ? "text-red-600 font-bold" : "text-slate-900"
                 }`}
               >
                 {formatUtcDate(invoice.dueDate)}
@@ -306,7 +318,90 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
               {formatPaiseToInr(invoice.totalAmount)}
             </span>
           </div>
+
+          <div className="flex w-72 justify-between text-sm font-medium text-emerald-700 pt-1">
+            <span>Amount Paid:</span>
+            <span>{formatPaiseToInr(invoice.amountPaid)}</span>
+          </div>
+
+          <div className="flex w-72 justify-between text-sm font-bold text-slate-900 border-t border-slate-200 pt-2">
+            <span>Remaining Outstanding:</span>
+            <span className={outstanding > 0 ? "text-amber-700" : "text-emerald-700"}>
+              {formatPaiseToInr(outstanding)}
+            </span>
+          </div>
         </div>
+      </div>
+
+      {/* Payment History Table */}
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+          <div>
+            <h2 className="font-semibold text-slate-900 flex items-center gap-2">
+              <CreditCard className="h-5 w-5 text-emerald-600" />
+              Payment History
+            </h2>
+            <p className="text-xs text-slate-500">
+              Audit trail of all online and offline payments recorded for this invoice.
+            </p>
+          </div>
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+            {invoice.payments.length} {invoice.payments.length === 1 ? "Payment" : "Payments"}
+          </span>
+        </div>
+
+        {invoice.payments.length === 0 ? (
+          <div className="p-8 text-center text-sm text-slate-500">
+            No payments have been recorded for this invoice yet.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm text-slate-600">
+              <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                <tr>
+                  <th scope="col" className="px-6 py-3">
+                    Payment Date (UTC)
+                  </th>
+                  <th scope="col" className="px-6 py-3">
+                    Method
+                  </th>
+                  <th scope="col" className="px-6 py-3">
+                    Transaction Ref
+                  </th>
+                  <th scope="col" className="px-6 py-3">
+                    Notes
+                  </th>
+                  <th scope="col" className="px-6 py-3 text-right">
+                    Amount Paid
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {invoice.payments.map((p) => (
+                  <tr key={p.id} className="hover:bg-slate-50">
+                    <td className="px-6 py-4 font-medium text-slate-900">
+                      {formatUtcDate(p.paymentDate)}
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className="inline-block rounded bg-indigo-50 border border-indigo-100 px-2.5 py-0.5 text-xs font-semibold text-indigo-700">
+                        {p.method}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 font-mono text-xs text-slate-600">
+                      {p.transactionRef || "—"}
+                    </td>
+                    <td className="px-6 py-4 text-xs text-slate-500">
+                      {p.notes || "—"}
+                    </td>
+                    <td className="px-6 py-4 text-right font-semibold text-emerald-700">
+                      +{formatPaiseToInr(p.amount)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

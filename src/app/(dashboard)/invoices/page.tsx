@@ -5,6 +5,7 @@ import Link from "next/link";
 import { InvoicesToolbar } from "./invoices-toolbar";
 import { formatPaiseToInr } from "@/lib/money";
 import { formatUtcDate } from "@/lib/dates";
+import { getInvoiceOutstanding, isInvoiceOverdue } from "@/lib/receivables";
 import { Receipt, ChevronLeft, ChevronRight, Eye, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -13,6 +14,7 @@ interface PageProps {
     q?: string;
     status?: string;
     overdue?: string;
+    outstanding?: string;
     page?: string;
   };
 }
@@ -23,6 +25,7 @@ export default async function InvoicesListPage({ searchParams }: PageProps) {
   const query = searchParams.q?.trim() || "";
   const statusFilter = searchParams.status?.toUpperCase();
   const isOverdueFilter = searchParams.overdue === "true";
+  const isOutstandingFilter = searchParams.outstanding === "true";
   const page = Math.max(1, parseInt(searchParams.page || "1", 10));
   const pageSize = 10;
   const now = new Date();
@@ -31,9 +34,12 @@ export default async function InvoicesListPage({ searchParams }: PageProps) {
   const where: any = {};
 
   if (isOverdueFilter) {
-    // Dynamic Overdue: dueDate < now (UTC) and status not PAID or CANCELLED
+    // Dynamic Overdue: dueDate < now (UTC) and status not in (PAID, CANCELLED)
     where.dueDate = { lt: now };
     where.status = { notIn: [InvoiceStatus.PAID, InvoiceStatus.CANCELLED] };
+  } else if (isOutstandingFilter) {
+    // Outstanding: CONFIRMED invoices that are not yet fully paid
+    where.status = InvoiceStatus.CONFIRMED;
   } else if (statusFilter && statusFilter !== "ALL") {
     if (Object.values(InvoiceStatus).includes(statusFilter as InvoiceStatus)) {
       where.status = statusFilter as InvoiceStatus;
@@ -105,27 +111,30 @@ export default async function InvoicesListPage({ searchParams }: PageProps) {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-          Invoices & Billing Statements
-        </h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Generated statements, automated tax calculations, payment status, and accounts receivable tracking.
-        </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+            Invoices & Accounts Receivable
+          </h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Review billing cycles, track outstanding receivables, and trigger scheduled invoice generation.
+          </p>
+        </div>
       </div>
 
-      {/* Toolbar */}
+      {/* Toolbar & Search */}
       <InvoicesToolbar
         currentSearch={query}
         currentStatus={statusFilter || "ALL"}
         isOverdueFilter={isOverdueFilter}
+        isOutstandingFilter={isOutstandingFilter}
       />
 
-      {/* Table */}
+      {/* Invoices Table */}
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm text-slate-600">
-            <thead className="border-b border-slate-200 bg-slate-50/75 text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold uppercase tracking-wider text-slate-500">
               <tr>
                 <th scope="col" className="px-6 py-3.5">
                   Invoice #
@@ -140,7 +149,10 @@ export default async function InvoicesListPage({ searchParams }: PageProps) {
                   Due Date
                 </th>
                 <th scope="col" className="px-6 py-3.5">
-                  Total Amount
+                  Total
+                </th>
+                <th scope="col" className="px-6 py-3.5">
+                  Outstanding
                 </th>
                 <th scope="col" className="px-6 py-3.5">
                   Status
@@ -153,23 +165,22 @@ export default async function InvoicesListPage({ searchParams }: PageProps) {
             <tbody className="divide-y divide-slate-100">
               {invoices.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="p-8 text-center text-slate-500">
+                  <td colSpan={8} className="p-8 text-center text-slate-500">
                     <Receipt className="mx-auto h-8 w-8 text-slate-400" />
                     <p className="mt-2 text-sm font-medium">No invoices found</p>
                     <p className="text-xs">
                       {isOverdueFilter
                         ? "Great news! There are no overdue invoices at this time."
+                        : isOutstandingFilter
+                        ? "All confirmed invoices are fully paid!"
                         : "Click 'Run Billing' above to generate invoices for subscriptions due."}
                     </p>
                   </td>
                 </tr>
               ) : (
                 invoices.map((inv) => {
-                  // Dynamically computed overdue check: dueDate < today and not PAID or CANCELLED
-                  const isOverdue =
-                    inv.dueDate < now &&
-                    inv.status !== InvoiceStatus.PAID &&
-                    inv.status !== InvoiceStatus.CANCELLED;
+                  const overdue = isInvoiceOverdue(inv, now);
+                  const outstanding = getInvoiceOutstanding(inv);
 
                   return (
                     <tr
@@ -216,6 +227,15 @@ export default async function InvoicesListPage({ searchParams }: PageProps) {
                         )}
                       </td>
                       <td className="px-6 py-4">
+                        <p
+                          className={`font-semibold ${
+                            outstanding > 0 ? "text-amber-700" : "text-slate-500"
+                          }`}
+                        >
+                          {formatPaiseToInr(outstanding)}
+                        </p>
+                      </td>
+                      <td className="px-6 py-4">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <span
                             className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold ${getStatusBadge(
@@ -225,7 +245,7 @@ export default async function InvoicesListPage({ searchParams }: PageProps) {
                             {inv.status}
                           </span>
 
-                          {isOverdue && (
+                          {overdue && (
                             <span className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700 animate-pulse">
                               <AlertTriangle className="h-3 w-3" />
                               OVERDUE
@@ -238,10 +258,10 @@ export default async function InvoicesListPage({ searchParams }: PageProps) {
                           variant="ghost"
                           size="sm"
                           asChild
-                          className="h-8 text-blue-600 hover:text-blue-700"
+                          className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
                         >
                           <Link href={`/invoices/${inv.id}`}>
-                            <Eye className="h-4 w-4 mr-1" />
+                            <Eye className="mr-1.5 h-3.5 w-3.5" />
                             View
                           </Link>
                         </Button>
@@ -254,72 +274,53 @@ export default async function InvoicesListPage({ searchParams }: PageProps) {
           </table>
         </div>
 
-        {/* Pagination */}
-        <div className="flex items-center justify-between border-t border-slate-200 px-6 py-3.5 bg-slate-50/50">
-          <p className="text-xs text-slate-500">
-            Showing{" "}
-            <span className="font-medium text-slate-700">
-              {totalCount === 0 ? 0 : (page - 1) * pageSize + 1}
-            </span>{" "}
-            to{" "}
-            <span className="font-medium text-slate-700">
-              {Math.min(page * pageSize, totalCount)}
-            </span>{" "}
-            of <span className="font-medium text-slate-700">{totalCount}</span> invoices
-          </p>
-
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page <= 1}
-              asChild={page > 1}
-            >
-              {page > 1 ? (
-                <Link
-                  href={`/invoices?page=${page - 1}&q=${encodeURIComponent(
-                    query
-                  )}&status=${statusFilter || "ALL"}&overdue=${isOverdueFilter}`}
-                >
-                  <ChevronLeft className="h-4 w-4 mr-1" />
-                  Previous
-                </Link>
-              ) : (
-                <span className="flex items-center">
-                  <ChevronLeft className="h-4 w-4 mr-1" />
-                  Previous
-                </span>
-              )}
-            </Button>
-
-            <span className="text-xs text-slate-600 px-2">
-              Page {page} of {Math.max(1, totalPages)}
-            </span>
-
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page >= totalPages}
-              asChild={page < totalPages}
-            >
-              {page < totalPages ? (
-                <Link
-                  href={`/invoices?page=${page + 1}&q=${encodeURIComponent(
-                    query
-                  )}&status=${statusFilter || "ALL"}&overdue=${isOverdueFilter}`}
-                >
-                  Next
-                  <ChevronRight className="h-4 w-4 ml-1" />
-                </Link>
-              ) : (
-                <span className="flex items-center">
-                  Next
-                  <ChevronRight className="h-4 w-4 ml-1" />
-                </span>
-              )}
-            </Button>
+        {/* Server Pagination */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between border-t border-slate-200 bg-white px-6 py-3">
+            <div className="text-xs text-slate-500">
+              Showing page <span className="font-semibold text-slate-800">{page}</span> of{" "}
+              <span className="font-semibold text-slate-800">{totalPages}</span> ({totalCount} total invoices)
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page <= 1}
+                asChild={page > 1}
+              >
+                {page > 1 ? (
+                  <Link
+                    href={`/invoices?q=${encodeURIComponent(query)}&status=${statusFilter || ""}&overdue=${isOverdueFilter}&outstanding=${isOutstandingFilter}&page=${page - 1}`}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Link>
+                ) : (
+                  <span>
+                    <ChevronLeft className="h-4 w-4" />
+                  </span>
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page >= totalPages}
+                asChild={page < totalPages}
+              >
+                {page < totalPages ? (
+                  <Link
+                    href={`/invoices?q=${encodeURIComponent(query)}&status=${statusFilter || ""}&overdue=${isOverdueFilter}&outstanding=${isOutstandingFilter}&page=${page + 1}`}
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Link>
+                ) : (
+                  <span>
+                    <ChevronRight className="h-4 w-4" />
+                  </span>
+                )}
+              </Button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

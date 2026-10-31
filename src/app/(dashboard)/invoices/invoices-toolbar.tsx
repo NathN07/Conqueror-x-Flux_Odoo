@@ -12,12 +12,14 @@ interface InvoicesToolbarProps {
   currentSearch?: string;
   currentStatus?: string;
   isOverdueFilter?: boolean;
+  isOutstandingFilter?: boolean;
 }
 
 export function InvoicesToolbar({
   currentSearch = "",
   currentStatus = "ALL",
   isOverdueFilter = false,
+  isOutstandingFilter = false,
 }: InvoicesToolbarProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -41,17 +43,18 @@ export function InvoicesToolbar({
 
   const handleStatusChange = (status: string) => {
     const params = new URLSearchParams(searchParams.toString());
+    params.delete("overdue");
+    params.delete("outstanding");
+    params.delete("status");
+
     if (status === "OVERDUE") {
       params.set("overdue", "true");
-      params.delete("status");
-    } else {
-      params.delete("overdue");
-      if (status && status !== "ALL") {
-        params.set("status", status);
-      } else {
-        params.delete("status");
-      }
+    } else if (status === "OUTSTANDING") {
+      params.set("outstanding", "true");
+    } else if (status && status !== "ALL") {
+      params.set("status", status);
     }
+
     params.set("page", "1");
     router.push(`/invoices?${params.toString()}`);
   };
@@ -76,7 +79,12 @@ export function InvoicesToolbar({
     }
   };
 
-  const activeSelectValue = isOverdueFilter ? "OVERDUE" : currentStatus;
+  let activeSelectValue = currentStatus;
+  if (isOverdueFilter) {
+    activeSelectValue = "OVERDUE";
+  } else if (isOutstandingFilter) {
+    activeSelectValue = "OUTSTANDING";
+  }
 
   return (
     <div className="space-y-4">
@@ -87,7 +95,7 @@ export function InvoicesToolbar({
         </div>
       )}
 
-      {/* Billing Run Summary Modal / Banner */}
+      {/* Billing Run Summary Banner */}
       {billingSummary && (
         <div className="rounded-xl border border-blue-200 bg-blue-50/80 p-5 shadow-sm animate-in fade-in zoom-in-95">
           <div className="flex items-start justify-between">
@@ -100,66 +108,49 @@ export function InvoicesToolbar({
                   Billing Job Completed Successfully
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Recurring billing engine run at {new Date(billingSummary.runDate).toLocaleTimeString()}
+                  Automated recurring billing cycle processed subscriptions.
                 </p>
               </div>
             </div>
             <button
               onClick={() => setBillingSummary(null)}
-              className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-600"
+              className="rounded-md p-1 text-slate-400 hover:bg-white hover:text-slate-600"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4 text-center">
-            <div className="rounded-lg bg-white p-3 border border-slate-200">
-              <p className="text-xs text-slate-500">Evaluated</p>
+          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="rounded-lg bg-white p-3 border border-slate-200/80">
+              <p className="text-xs text-slate-500">Subscriptions Evaluated</p>
               <p className="text-lg font-bold text-slate-900">
                 {billingSummary.totalSubscriptionsEvaluated}
               </p>
             </div>
-            <div className="rounded-lg bg-white p-3 border border-slate-200">
-              <p className="text-xs text-emerald-600 font-medium">Invoices Created</p>
-              <p className="text-lg font-bold text-emerald-700">
-                {billingSummary.createdCount}
+            <div className="rounded-lg bg-white p-3 border border-slate-200/80">
+              <p className="text-xs text-slate-500">Invoices Generated</p>
+              <p className="text-lg font-bold text-emerald-600">
+                +{billingSummary.createdCount}
               </p>
             </div>
-            <div className="rounded-lg bg-white p-3 border border-slate-200">
-              <p className="text-xs text-slate-500">Skipped (Billed/Future)</p>
-              <p className="text-lg font-bold text-slate-700">
+            <div className="rounded-lg bg-white p-3 border border-slate-200/80">
+              <p className="text-xs text-slate-500">Skipped (Already Billed)</p>
+              <p className="text-lg font-bold text-slate-600">
                 {billingSummary.skippedCount}
               </p>
             </div>
-            <div className="rounded-lg bg-white p-3 border border-slate-200">
-              <p className="text-xs text-red-600 font-medium">Failed</p>
-              <p className="text-lg font-bold text-red-700">
-                {billingSummary.failedCount}
+            <div className="rounded-lg bg-white p-3 border border-slate-200/80">
+              <p className="text-xs text-slate-500">Total Billed</p>
+              <p className="text-lg font-bold text-blue-600">
+                {formatPaiseToInr(
+                  billingSummary.invoicesCreated.reduce(
+                    (sum, inv) => sum + inv.totalAmount,
+                    0
+                  )
+                )}
               </p>
             </div>
           </div>
-
-          {billingSummary.invoicesCreated.length > 0 && (
-            <div className="mt-4 border-t border-blue-200/60 pt-3">
-              <p className="text-xs font-semibold uppercase tracking-wider text-slate-600 mb-2">
-                Created Invoices ({billingSummary.invoicesCreated.length}):
-              </p>
-              <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
-                {billingSummary.invoicesCreated.map((inv, idx) => (
-                  <span
-                    key={idx}
-                    className="inline-flex items-center gap-1.5 rounded-md bg-white border border-blue-200 px-2.5 py-1 text-xs font-medium text-slate-800 shadow-xs"
-                  >
-                    <span className="font-mono text-blue-600">{inv.invoiceNumber}</span>
-                    <span className="text-slate-400">•</span>
-                    <span>{inv.subscriptionNumber}</span>
-                    <span className="text-slate-400">•</span>
-                    <span className="font-semibold">{formatPaiseToInr(inv.totalAmount)}</span>
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       )}
 
@@ -186,9 +177,10 @@ export function InvoicesToolbar({
             <option value="ALL">All Statuses</option>
             <option value="DRAFT">Draft</option>
             <option value="CONFIRMED">Confirmed</option>
+            <option value="OUTSTANDING">⏳ Outstanding (Confirmed & Unpaid)</option>
+            <option value="OVERDUE">⚠️ Overdue (Past Due Date)</option>
             <option value="PAID">Paid</option>
             <option value="CANCELLED">Cancelled</option>
-            <option value="OVERDUE">⚠️ Overdue Invoices</option>
           </select>
         </div>
 

@@ -18,17 +18,22 @@ import {
   AlertCircle,
 } from "lucide-react";
 import Link from "next/link";
+import { RecordPaymentDialog } from "@/components/payments/record-payment-dialog";
 
 interface InvoiceActionsProps {
   invoiceId: string;
+  invoiceNumber: string;
   status: InvoiceStatus;
   hasPayments: boolean;
+  outstanding: number;
 }
 
 export function InvoiceActions({
   invoiceId,
+  invoiceNumber,
   status,
   hasPayments,
+  outstanding,
 }: InvoiceActionsProps) {
   const router = useRouter();
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
@@ -102,13 +107,15 @@ export function InvoiceActions({
 
   const canConfirm = status === InvoiceStatus.DRAFT;
   const canCancel =
-    (status === InvoiceStatus.DRAFT || status === InvoiceStatus.CONFIRMED) && !hasPayments;
+    (status === InvoiceStatus.DRAFT || status === InvoiceStatus.CONFIRMED) &&
+    !hasPayments;
+  const canRecordPayment = status === InvoiceStatus.CONFIRMED && outstanding > 0;
 
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col items-end gap-2">
       {feedback && (
         <div
-          className={`flex items-center gap-2 rounded-lg border p-3 text-xs ${
+          className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium ${
             feedback.type === "success"
               ? "border-emerald-200 bg-emerald-50 text-emerald-800"
               : "border-red-200 bg-red-50 text-red-800"
@@ -124,6 +131,20 @@ export function InvoiceActions({
       )}
 
       <div className="flex flex-wrap items-center gap-2">
+        {/* Record Payment Action */}
+        {canRecordPayment && (
+          <RecordPaymentDialog
+            targetInvoice={{
+              id: invoiceId,
+              invoiceNumber,
+              outstanding,
+            }}
+            buttonLabel="Record Payment"
+            buttonVariant="default"
+            buttonSize="sm"
+          />
+        )}
+
         {/* Send Action */}
         <Button
           variant="outline"
